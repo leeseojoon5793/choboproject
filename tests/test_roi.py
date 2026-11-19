@@ -98,3 +98,13 @@ def test_histogram_puts_values_in_right_bins():
     counts, _ = roi_histogram(a, {"x": 0, "y": 0, "w": 3, "h": 1})
     assert counts[0] == 2
     assert counts[255] == 1
+
+@pytest.mark.parametrize("bad_roi", [[0, 0, 2, 2], None, "0,0,2,2"])
+def test_non_dict_roi_rejected(img, bad_roi):
+    with pytest.raises(ValueError, match="딕셔너리"):
+        validate_roi(bad_roi, img.shape)
+
+@pytest.mark.parametrize("bins", [0, -1, 2.5, True])
+def test_bad_bins_rejected(img, bins):
+    with pytest.raises(ValueError, match="bins"):
+        roi_histogram(img, {"x": 0, "y": 0, "w": 2, "h": 2}, bins=bins)

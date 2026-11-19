@@ -12,6 +12,8 @@ def validate_roi(roi: dict, image_shape: tuple) -> None:
     """ROI가 영상 안에 제대로 들어가는지 검사한다. 문제가 있으면 이유를 담아 ValueError를 낸다."""
     if len(image_shape) != 2:
         raise ValueError("흑백(2차원) 영상만 지원합니다.")
+    if not isinstance(roi, dict):
+        raise ValueError("ROI는 {x, y, w, h} 형태의 딕셔너리여야 합니다.")
 
     missing = [k for k in ROI_KEYS if k not in roi]
     if missing:
@@ -59,5 +61,7 @@ def roi_histogram(img: np.ndarray, roi: dict, bins: int = 256) -> tuple:
 
     반환: (counts, edges) — np.histogram과 같은 형태
     """
+    if isinstance(bins, bool) or not isinstance(bins, (int, np.integer)) or bins < 1:
+        raise ValueError("bins는 1 이상의 정수여야 합니다.")
     region = crop_roi(img, roi)
     return np.histogram(region, bins=bins, range=(0, 256))
