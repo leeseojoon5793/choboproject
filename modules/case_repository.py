@@ -75,6 +75,7 @@ def register_case(
         image_path = storage_info["storage_path"]
         storage_type = storage_info["storage_type"]
         image_url = storage_info["image_url"]
+        low_dose_dir = f"cases/{cleaned_id}/low_dose/"
     else:
         image_dir.mkdir(parents=True, exist_ok=True)
         saved_path = image_dir / f"{cleaned_id}{ext}"
@@ -82,15 +83,23 @@ def register_case(
         image_path = str(saved_path)
         storage_type = "local"
         image_url = None
+        low_dose_dir = str(image_dir)
+
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     case_data = {
         "case_id": cleaned_id,
         "title": title.strip() or cleaned_id,
         "modality": "CT",
-        "body_part": "Chest",
+        "body_part": "CHEST",
         "dose_type": "low_dose",
-        "window_center": int(window_center),
-        "window_width": int(window_width),
+        "window_setting": {
+            "center": int(window_center),
+            "width": int(window_width),
+        },
+        "storage_paths": {
+            "low_dose_dir": low_dose_dir,
+        },
         "storage_type": storage_type,
         "image_path": image_path,
         "image_url": image_url,
@@ -98,10 +107,11 @@ def register_case(
         "height": img_info["height"],
         "file_format": img_info["file_format"],
         "size_bytes": img_info["size_bytes"],
-        "status": "uploaded",
+        "status": "received",
         "created_by": created_by,
         "assignee": assignee,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now_iso,
+        "updated_at": now_iso,
     }
 
     if firestore_client is not None:

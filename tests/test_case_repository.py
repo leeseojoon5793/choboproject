@@ -28,7 +28,7 @@ def test_register_case_saves_image_and_metadata(tmp_path):
     )
 
     assert result["case_id"] == "CT-CHEST-001"
-    assert result["status"] == "uploaded"
+    assert result["status"] == "received"
     assert result["created_by"] == "fake-register"
     assert result["assignee"] == "fake-reviewer"
     assert (img_dir / "CT-CHEST-001.png").exists()
