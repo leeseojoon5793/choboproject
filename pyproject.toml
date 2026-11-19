@@ -8,8 +8,10 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "firebase-admin>=7.8.0",
     "numpy>=2.5.4",
     "opencv-python>=5.0.0.93",
+    "requests>=2.34.2",
     "streamlit>=1.67.0",
 ]
 
