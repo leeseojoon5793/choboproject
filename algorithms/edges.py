@@ -31,6 +31,14 @@ def canny(
 ) -> np.ndarray:
     validate_image(img)
 
+    for threshold in (threshold1, threshold2):
+        if (
+            isinstance(threshold, (bool, np.bool_))
+            or not isinstance(threshold, (int, float, np.integer, np.floating))
+            or not np.isfinite(threshold)
+        ):
+            raise ValueError("임계값은 유효한 숫자여야 합니다.")
+
     if not (0 <= threshold1 < threshold2 <= 255):
         raise ValueError("임계값은 0 이상 255 이하이며 threshold1이 더 작아야 합니다.")
 
