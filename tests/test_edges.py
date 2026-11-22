@@ -47,3 +47,13 @@ def test_canny_invalid_threshold():
 
     with pytest.raises(ValueError):
         canny(img, 200, 100)
+@pytest.mark.parametrize("invalid_value", ["100", True, False, float("nan")])
+@pytest.mark.parametrize("position", [1, 2])
+def test_canny_invalid_threshold_type(invalid_value, position):
+    img = np.zeros((10, 10), dtype=np.uint8)
+
+    thresholds = [100, 200]
+    thresholds[position - 1] = invalid_value
+
+    with pytest.raises(ValueError):
+        canny(img, *thresholds)
