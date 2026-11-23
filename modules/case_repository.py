@@ -30,6 +30,14 @@ def _now_utc_z() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _to_db_relative_path(target_path: Path, base_dir: Path) -> str:
+    """실행 환경(서버/로컬)에 무관하도록 data_dir 기준 상대 경로(POSIX 형식)를 반환한다."""
+    try:
+        return target_path.relative_to(base_dir).as_posix()
+    except ValueError:
+        return target_path.as_posix()
+
+
 def _load_json_dict(db_path: Path) -> dict:
     if not db_path.exists():
         return {}
@@ -52,18 +60,22 @@ def register_slice(
     slice_index: int,
     file_name: str,
     file_bytes: bytes,
-    uploaded_by: str = "fake-register",
+    uploaded_by: str,
     z_position: float | None = None,
     image_dir: Path | None = None,
     firestore_client=None,
     local_images_db_path: Path | None = None,
+    data_dir: Path | None = None,
 ) -> dict:
-    """단일 슬라이스 영상을 디스크에 저장하고 images 컬렉션(또는 로컬 JSON)에 메타데이터를 기록한다.
-    DB 저장 중 예외가 발생하면 방금 저장한 이미지 파일을 즉시 삭제해 정합성을 유지한다.
+    """단일 슬라이스 영상을 디스크에 저장하고 images 컬렉션에 data_dir 기준 상대 경로로 기록한다.
+    중복 slice_index 호출 시 에러를 발생시키고, DB 저장 실패 시 방금 저장한 파일을 롤백한다.
     """
+    if not isinstance(uploaded_by, str) or not uploaded_by.strip():
+        raise CaseValidationError("업로드 사용자 ID(uploaded_by)를 입력해 주세요.")
+
     img_info = validate_image_file(file_name, file_bytes)
 
-    base_dir = get_base_data_dir()
+    base_dir = Path(data_dir) if data_dir is not None else get_base_data_dir()
     target_root = Path(image_dir) if image_dir is not None else (base_dir / "low_dose_images")
     images_db_path = (
         Path(local_images_db_path)
@@ -73,23 +85,34 @@ def register_slice(
 
     image_id = f"{case_id}_{slice_index:03d}"
     case_folder = target_root / case_id
-    case_folder.mkdir(parents=True, exist_ok=True)
-
     saved_file_name = f"{slice_index:03d}{img_info['extension']}"
     saved_path = case_folder / saved_file_name
+
+    # 중복 slice_index 덮어쓰기 방지
+    if firestore_client is not None:
+        existing_snap = firestore_client.collection("images").document(image_id).get()
+        if getattr(existing_snap, "exists", False):
+            raise CaseValidationError(f"이미 등록된 슬라이스입니다: {image_id}")
+    else:
+        local_images = _load_json_dict(images_db_path)
+        if image_id in local_images or saved_path.exists():
+            raise CaseValidationError(f"이미 등록된 슬라이스입니다: {image_id}")
+
+    case_folder.mkdir(parents=True, exist_ok=True)
     saved_path.write_bytes(file_bytes)
 
+    rel_file_path = _to_db_relative_path(saved_path, base_dir)
     now_z = _now_utc_z()
     image_doc = {
         "image_id": image_id,
         "case_id": case_id,
         "slice_index": slice_index,
-        "z_position": float(z_position) if z_position is not None else float(slice_index),
-        "file_path": str(saved_path),
+        "z_position": float(z_position) if z_position is not None else None,
+        "file_path": rel_file_path,
         "width": img_info["width"],
         "height": img_info["height"],
         "size_bytes": img_info["size_bytes"],
-        "uploaded_by": uploaded_by,
+        "uploaded_by": uploaded_by.strip(),
         "uploaded_at": now_z,
     }
 
@@ -110,9 +133,9 @@ def register_slice(
 def register_case(
     case_id: str,
     title: str,
+    created_by: str,
     file_name: str | None = None,
     file_bytes: bytes | None = None,
-    created_by: str = "fake-register",
     assignee: str = "",
     manufacturer: str = "SIEMENS",
     model: str = "",
@@ -124,14 +147,17 @@ def register_case(
     firestore_client=None,
     local_db_path: Path | None = None,
     local_images_db_path: Path | None = None,
+    data_dir: Path | None = None,
 ) -> dict:
-    """신규 케이스 메타데이터를 cases 컬렉션에 저장하고, 초기 파일이 전달되면 첫 슬라이스(images)도 함께 등록한다.
-    DB 저장 중 예외가 발생하면 저장된 파일도 함께 롤백한다.
+    """cases 문서를 먼저 저장한 뒤 초기 슬라이스를 등록한다.
+    슬라이스 등록 중 예외가 발생하면 방금 생성한 cases 문서를 즉시 삭제해 정합성을 유지한다.
     """
     if not isinstance(title, str) or not title.strip():
         raise CaseValidationError("케이스 제목을 입력해 주세요.")
+    if not isinstance(created_by, str) or not created_by.strip():
+        raise CaseValidationError("등록자 ID(created_by)를 입력해 주세요.")
 
-    base_dir = get_base_data_dir()
+    base_dir = Path(data_dir) if data_dir is not None else get_base_data_dir()
     db_path = Path(local_db_path) if local_db_path is not None else (base_dir / "cases_local.json")
     target_root = Path(image_dir) if image_dir is not None else (base_dir / "low_dose_images")
 
@@ -142,7 +168,7 @@ def register_case(
         firestore_client=firestore_client,
     )
 
-    low_dose_dir = str(target_root / cleaned_id)
+    rel_low_dose_dir = _to_db_relative_path(target_root / cleaned_id, base_dir)
     now_z = _now_utc_z()
 
     case_data = {
@@ -155,37 +181,43 @@ def register_case(
         "total_slices": int(total_slices),
         "window_setting": window_setting or {"center": -600, "width": 1500},
         "storage_paths": {
-            "low_dose_dir": low_dose_dir,
+            "low_dose_dir": rel_low_dose_dir,
         },
         "status": "received",
-        "created_by": created_by,
+        "created_by": created_by.strip(),
         "assignee": assignee,
         "created_at": now_z,
         "updated_at": now_z,
     }
 
-    first_slice = None
-    if file_name is not None and file_bytes is not None:
-        first_slice = register_slice(
-            case_id=cleaned_id,
-            slice_index=1,
-            file_name=file_name,
-            file_bytes=file_bytes,
-            uploaded_by=created_by,
-            image_dir=target_root,
-            firestore_client=firestore_client,
-            local_images_db_path=local_images_db_path,
-        )
+    # 1단계: cases 문서 먼저 저장
+    if firestore_client is not None:
+        firestore_client.collection("cases").document(cleaned_id).set(case_data)
+    else:
+        local_cases[cleaned_id] = case_data
+        _save_json_dict(local_cases, db_path)
 
-    try:
-        if firestore_client is not None:
-            firestore_client.collection("cases").document(cleaned_id).set(case_data)
-        else:
-            local_cases[cleaned_id] = case_data
-            _save_json_dict(local_cases, db_path)
-    except Exception:
-        if first_slice is not None:
-            Path(first_slice["file_path"]).unlink(missing_ok=True)
-        raise
+    # 2단계: 초기 슬라이스 등록 (실패 시 방금 저장한 cases 문서 롤백 삭제)
+    if file_name is not None and file_bytes is not None:
+        try:
+            register_slice(
+                case_id=cleaned_id,
+                slice_index=1,
+                file_name=file_name,
+                file_bytes=file_bytes,
+                uploaded_by=created_by.strip(),
+                image_dir=target_root,
+                firestore_client=firestore_client,
+                local_images_db_path=local_images_db_path,
+                data_dir=base_dir,
+            )
+        except Exception:
+            if firestore_client is not None:
+                firestore_client.collection("cases").document(cleaned_id).delete()
+            else:
+                rollback_cases = _load_json_dict(db_path)
+                rollback_cases.pop(cleaned_id, None)
+                _save_json_dict(rollback_cases, db_path)
+            raise
 
     return case_data

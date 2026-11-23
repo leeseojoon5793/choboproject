@@ -1,7 +1,7 @@
-import io
 import re
 from pathlib import Path
-from PIL import Image, UnidentifiedImageError
+import cv2
+import numpy as np
 
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024  # 20MB
@@ -40,7 +40,7 @@ def validate_case_id(
 
 
 def validate_image_file(file_name: str, file_bytes: bytes) -> dict:
-    """업로드된 이미지의 확장자, 용량, 디코딩 가능 여부, 최소 해상도를 검증한다."""
+    """OpenCV를 사용해 업로드된 이미지의 확장자, 용량, 디코딩 가능 여부, 최소 해상도를 검증한다."""
     if not file_name or not isinstance(file_name, str):
         raise CaseValidationError("파일 이름이 올바르지 않습니다.")
 
@@ -56,15 +56,15 @@ def validate_image_file(file_name: str, file_bytes: bytes) -> dict:
     if len(file_bytes) > MAX_FILE_SIZE_BYTES:
         raise CaseValidationError("파일 크기가 20MB를 초과합니다.")
 
-    try:
-        with Image.open(io.BytesIO(file_bytes)) as img:
-            img.verify()
-        with Image.open(io.BytesIO(file_bytes)) as img:
-            width, height = img.size
-            mode = img.mode
-            fmt = img.format or ext.lstrip(".").upper()
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
-        raise CaseValidationError("손상되었거나 올바른 이미지 파일이 아닙니다.") from exc
+    buf = np.frombuffer(file_bytes, dtype=np.uint8)
+    decoded = cv2.imdecode(buf, cv2.IMREAD_UNCHANGED)
+    if decoded is None or decoded.size == 0:
+        raise CaseValidationError("손상되었거나 올바른 이미지 파일이 아닙니다.")
+
+    height, width = decoded.shape[:2]
+    channels = 1 if decoded.ndim == 2 else decoded.shape[2]
+    mode = "L" if channels == 1 else ("RGBA" if channels == 4 else "RGB")
+    fmt = "PNG" if ext == ".png" else "JPEG"
 
     if width < MIN_IMAGE_DIMENSION or height < MIN_IMAGE_DIMENSION:
         raise CaseValidationError(
@@ -74,8 +74,8 @@ def validate_image_file(file_name: str, file_bytes: bytes) -> dict:
     return {
         "extension": ext,
         "file_format": fmt,
-        "width": width,
-        "height": height,
+        "width": int(width),
+        "height": int(height),
         "mode": mode,
         "size_bytes": len(file_bytes),
     }
