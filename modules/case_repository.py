@@ -221,3 +221,69 @@ def register_case(
             raise
 
     return case_data
+
+
+def list_cases(
+    firestore_client=None,
+    local_db_path: Path | None = None,
+) -> list[dict]:
+    """Firestore 또는 로컬 JSON 저장소에서 전체 케이스 목록을 조회한다."""
+    if firestore_client is not None:
+        docs = firestore_client.collection("cases").stream()
+        cases = []
+        for doc in docs:
+            data = doc.to_dict() if hasattr(doc, "to_dict") else dict(doc)
+            data.setdefault("case_id", getattr(doc, "id", data.get("case_id", "")))
+            cases.append(data)
+        return cases
+
+    db_path = (
+        Path(local_db_path)
+        if local_db_path is not None
+        else (get_base_data_dir() / "cases_local.json")
+    )
+    local_cases = _load_json_dict(db_path)
+    return list(local_cases.values())
+
+
+def search_cases(
+    keyword: str = "",
+    status: str | None = None,
+    body_part: str | None = None,
+    created_by: str | None = None,
+    assignee: str | None = None,
+    unassigned_only: bool = False,
+    firestore_client=None,
+    local_db_path: Path | None = None,
+) -> list[dict]:
+    """키워드(case_id, title) 및 상태·부위·등록자·담당자·미배정 조건으로 케이스를 검색·필터링한다."""
+    cases = list_cases(firestore_client=firestore_client, local_db_path=local_db_path)
+    kw = keyword.strip().lower()
+
+    results = []
+    for case in cases:
+        if kw:
+            cid = str(case.get("case_id", "")).lower()
+            title = str(case.get("title", "")).lower()
+            if kw not in cid and kw not in title:
+                continue
+
+        if status and case.get("status") != status:
+            continue
+
+        if body_part and str(case.get("body_part", "")).upper() != body_part.strip().upper():
+            continue
+
+        if created_by and case.get("created_by") != created_by:
+            continue
+
+        if unassigned_only:
+            if str(case.get("assignee") or "").strip() != "":
+                continue
+        elif assignee is not None and assignee != "" and case.get("assignee") != assignee:
+            continue
+
+        results.append(case)
+
+    results.sort(key=lambda c: c.get("created_at", ""), reverse=True)
+    return results
