@@ -63,3 +63,36 @@ def test_unknown_param_rejected():
 def test_out_of_range_param_rejected(value):
     with pytest.raises(ValueError, match="사이여야"):
         run_algorithm("median", sample_image(), {"ksize": value})
+
+# ---------- 자료형 검사 (리뷰 반영) ----------
+
+@pytest.mark.parametrize("bad_params", [[("ksize", 3)], "ksize=3", 3])
+def test_params_must_be_dict(bad_params):
+    with pytest.raises(ValueError, match="딕셔너리"):
+        run_algorithm("median", sample_image(), bad_params)
+
+
+@pytest.mark.parametrize("key, params", [
+    ("bilateral", {"sigma_color": True}),
+    ("median", {"ksize": "3"}),
+    ("median", {"ksize": None}),
+])
+def test_non_number_param_rejected(key, params):
+    with pytest.raises(ValueError, match="숫자"):
+        run_algorithm(key, sample_image(), params)
+
+
+@pytest.mark.parametrize("value", [3.5, 5.0])
+def test_float_for_int_param_rejected(value):
+    with pytest.raises(ValueError, match="정수"):
+        run_algorithm("median", sample_image(), {"ksize": value})
+
+
+def test_nan_param_rejected():
+    # sigma_color는 정수 슬라이더라 NaN(소수)은 "정수여야"로 거절된다
+    with pytest.raises(ValueError, match="정수"):
+        run_algorithm("bilateral", sample_image(), {"sigma_color": float("nan")})
+
+
+def test_numpy_int_param_accepted():
+    run_algorithm("median", sample_image(), {"ksize": np.int64(5)})
