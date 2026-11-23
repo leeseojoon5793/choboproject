@@ -7,3 +7,4 @@ __pycache__/
 raw_dicom/
 processed_ct/
 .DS_Store
+data/

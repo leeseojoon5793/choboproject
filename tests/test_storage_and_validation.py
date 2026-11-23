@@ -1,58 +1,91 @@
-from unittest.mock import MagicMock
-import cv2
-import numpy as np
+import io
 import pytest
-from modules.case_repository import register_case
-from modules.case_validator import validate_case_id, validate_image_file
+from PIL import Image
+from modules.case_repository import register_case, register_slice
+from modules.case_validator import CaseValidationError, validate_case_id, validate_image_file
 
 
 def _make_png_bytes(width: int = 128, height: int = 128) -> bytes:
-    img = np.zeros((height, width), dtype=np.uint8)
-    ok, buf = cv2.imencode(".png", img)
-    assert ok
-    return buf.tobytes()
+    img = Image.new("L", (width, height), color=128)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def test_validate_image_file_rejects_oversized_file():
-    png_bytes = _make_png_bytes(128, 128)
-    with pytest.raises(ValueError, match="크기"):
-        validate_image_file("large.png", png_bytes, max_size_bytes=10)
+    oversized = b"0" * (20 * 1024 * 1024 + 1)
+    with pytest.raises(CaseValidationError, match="20MB"):
+        validate_image_file("big.png", oversized)
 
 
 def test_validate_image_file_rejects_too_small_resolution():
-    small_png = _make_png_bytes(32, 32)
-    with pytest.raises(ValueError, match="해상도"):
-        validate_image_file("tiny.png", small_png)
+    tiny_png = _make_png_bytes(width=32, height=32)
+    with pytest.raises(CaseValidationError, match="64x64"):
+        validate_image_file("tiny.png", tiny_png)
 
 
 def test_validate_case_id_rejects_invalid_characters():
-    with pytest.raises(ValueError, match="영문, 숫자"):
-        validate_case_id("../C002", set())
+    with pytest.raises(CaseValidationError):
+        validate_case_id("CT/001")
 
 
-def test_register_case_with_firebase_storage_and_firestore():
-    png_bytes = _make_png_bytes(128, 128)
+def test_register_slice_rolls_back_file_when_db_fails(tmp_path):
+    class FailingFirestore:
+        def collection(self, name):
+            return self
 
-    mock_firestore = MagicMock()
-    mock_firestore.collection.return_value.stream.return_value = []
+        def document(self, doc_id):
+            return self
 
-    mock_blob = MagicMock()
-    mock_blob.public_url = "https://storage.googleapis.com/bucket/cases/C002/low_dose.png"
-    mock_bucket = MagicMock()
-    mock_bucket.blob.return_value = mock_blob
+        def set(self, data):
+            raise RuntimeError("Firestore 연결 실패")
 
-    result = register_case(
-        case_id="C002",
-        title="Siemens Chest Low Dose",
-        file_name="slice_001.png",
-        file_bytes=png_bytes,
-        created_by="user_b",
-        firestore_client=mock_firestore,
-        storage_bucket=mock_bucket,
-    )
+    img_dir = tmp_path / "low_dose_images"
+    png_bytes = _make_png_bytes()
 
-    assert result["storage_type"] == "firebase_storage"
-    assert result["image_path"] == "cases/C002/low_dose.png"
-    assert result["image_url"] == "https://storage.googleapis.com/bucket/cases/C002/low_dose.png"
-    mock_blob.upload_from_string.assert_called_once()
-    mock_firestore.collection.return_value.document.return_value.set.assert_called_once()
+    with pytest.raises(RuntimeError, match="Firestore 연결 실패"):
+        register_slice(
+            case_id="ERR-001",
+            slice_index=1,
+            file_name="001.png",
+            file_bytes=png_bytes,
+            image_dir=img_dir,
+            firestore_client=FailingFirestore(),
+        )
+
+    # DB 저장 실패 시 방금 생성된 이미지 파일이 삭제되어 남지 않아야 함
+    assert not (img_dir / "ERR-001" / "001.png").exists()
+
+
+def test_register_case_rolls_back_file_when_db_fails(tmp_path):
+    class FailingCaseFirestore:
+        def collection(self, name):
+            self._col = name
+            return self
+
+        def document(self, doc_id):
+            return self
+
+        def get(self):
+            class Snap:
+                exists = False
+            return Snap()
+
+        def set(self, data):
+            if self._col == "cases":
+                raise RuntimeError("cases 컬렉션 저장 실패")
+
+    img_dir = tmp_path / "low_dose_images"
+    png_bytes = _make_png_bytes()
+
+    with pytest.raises(RuntimeError, match="cases 컬렉션 저장 실패"):
+        register_case(
+            case_id="ERR-002",
+            title="롤백 테스트 케이스",
+            file_name="001.png",
+            file_bytes=png_bytes,
+            image_dir=img_dir,
+            firestore_client=FailingCaseFirestore(),
+        )
+
+    assert not (img_dir / "ERR-002" / "001.png").exists()

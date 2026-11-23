@@ -1,7 +1,7 @@
-from pathlib import Path
+import io
 import re
-import cv2
-import numpy as np
+from pathlib import Path
+from PIL import Image, UnidentifiedImageError
 
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024  # 20MB
@@ -9,52 +9,73 @@ MIN_IMAGE_DIMENSION = 64
 CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def validate_image_file(
-    file_name: str,
-    file_bytes: bytes,
-    max_size_bytes: int = MAX_FILE_SIZE_BYTES,
-) -> dict:
-    """업로드된 파일의 확장자, 크기, 해상도 및 실제 이미지 디코딩 가능 여부를 검사한다."""
-    if not file_name or not file_bytes:
-        raise ValueError("파일이 비어 있습니다.")
+class CaseValidationError(ValueError):
+    """케이스 입력 데이터 및 업로드 영상 검증 실패 시 발생하는 예외."""
 
-    if len(file_bytes) > max_size_bytes:
-        raise ValueError(f"파일 크기가 제한({max_size_bytes // (1024 * 1024)}MB)을 초과했습니다.")
+
+def validate_case_id(
+    case_id: str,
+    existing_ids: set[str] | list[str] | None = None,
+    firestore_client=None,
+) -> str:
+    """케이스 ID 형식(영문·숫자·-·_) 및 중복 여부를 검증한다."""
+    if not isinstance(case_id, str) or not case_id.strip():
+        raise CaseValidationError("케이스 ID를 입력해 주세요.")
+
+    cleaned = case_id.strip()
+    if not CASE_ID_PATTERN.match(cleaned):
+        raise CaseValidationError(
+            "케이스 ID는 영문, 숫자, 하이픈(-), 언더스코어(_)만 사용할 수 있습니다."
+        )
+
+    if firestore_client is not None:
+        doc_snap = firestore_client.collection("cases").document(cleaned).get()
+        if getattr(doc_snap, "exists", False):
+            raise CaseValidationError(f"이미 등록된 케이스 ID입니다: {cleaned}")
+
+    if existing_ids is not None and cleaned in set(existing_ids):
+        raise CaseValidationError(f"이미 등록된 케이스 ID입니다: {cleaned}")
+
+    return cleaned
+
+
+def validate_image_file(file_name: str, file_bytes: bytes) -> dict:
+    """업로드된 이미지의 확장자, 용량, 디코딩 가능 여부, 최소 해상도를 검증한다."""
+    if not file_name or not isinstance(file_name, str):
+        raise CaseValidationError("파일 이름이 올바르지 않습니다.")
 
     ext = Path(file_name).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError("PNG 또는 JPEG 파일만 업로드할 수 있습니다.")
+        raise CaseValidationError(
+            f"지원하지 않는 파일 형식(확장자)입니다({ext}). PNG 또는 JPEG 파일만 업로드할 수 있습니다."
+        )
 
-    np_buf = np.frombuffer(file_bytes, dtype=np.uint8)
-    img = cv2.imdecode(np_buf, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        raise ValueError("손상되었거나 올바른 이미지 형식이 아닙니다.")
+    if not file_bytes or len(file_bytes) == 0:
+        raise CaseValidationError("비어 있는 파일입니다.")
 
-    height, width = img.shape
+    if len(file_bytes) > MAX_FILE_SIZE_BYTES:
+        raise CaseValidationError("파일 크기가 20MB를 초과합니다.")
+
+    try:
+        with Image.open(io.BytesIO(file_bytes)) as img:
+            img.verify()
+        with Image.open(io.BytesIO(file_bytes)) as img:
+            width, height = img.size
+            mode = img.mode
+            fmt = img.format or ext.lstrip(".").upper()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise CaseValidationError("손상되었거나 올바른 이미지 파일이 아닙니다.") from exc
+
     if width < MIN_IMAGE_DIMENSION or height < MIN_IMAGE_DIMENSION:
-        raise ValueError(f"이미지 해상도가 너무 작습니다. (최소 {MIN_IMAGE_DIMENSION}x{MIN_IMAGE_DIMENSION})")
-
-    file_format = "PNG" if ext == ".png" else "JPEG"
+        raise CaseValidationError(
+            f"이미지 해상도가 너무 작습니다({width}x{height}). 최소 {MIN_IMAGE_DIMENSION}x{MIN_IMAGE_DIMENSION} 이상이어야 합니다."
+        )
 
     return {
-        "file_format": file_format,
-        "width": int(width),
-        "height": int(height),
+        "extension": ext,
+        "file_format": fmt,
+        "width": width,
+        "height": height,
+        "mode": mode,
         "size_bytes": len(file_bytes),
-        "gray_image": img,
     }
-
-
-def validate_case_id(case_id: str, existing_case_ids: set[str]) -> str:
-    """케이스 ID의 공백, 허용 문자 패턴 및 기존 케이스와의 중복 등록 여부를 검사한다."""
-    cleaned_id = case_id.strip()
-    if not cleaned_id:
-        raise ValueError("케이스 ID를 입력해 주세요.")
-
-    if not CASE_ID_PATTERN.match(cleaned_id):
-        raise ValueError("케이스 ID는 영문, 숫자, 하이픈(-), 언더스코어(_)만 사용할 수 있습니다.")
-
-    if cleaned_id in existing_case_ids:
-        raise ValueError(f"이미 등록된 케이스 ID입니다: {cleaned_id}")
-
-    return cleaned_id
