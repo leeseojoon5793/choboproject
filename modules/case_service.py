@@ -81,3 +81,16 @@ def change_status(db, role, uid, case_id, new_status, reason="", assignee="",
         _save(logs_path, logs)
 
     return True, f"상태를 {old_status}에서 {new_status}(으)로 바꿨습니다."
+
+
+
+def list_reviewers(db) -> list[dict]:
+    # 로컬(가짜 로그인)에서는 가짜 검토 담당 하나만 있음
+    if db is None:
+        return [{"uid": "fake-reviewer", "email": "fake-reviewer"}]
+    reviewers = []
+    for doc in db.collection("users").stream():
+        user = doc.to_dict()
+        if user.get("role") == "reviewer":
+            reviewers.append({"uid": doc.id, "email": user.get("email", doc.id)})
+    return reviewers
