@@ -138,7 +138,7 @@ def register_case(
     file_bytes: bytes | None = None,
     assignee: str = "",
     manufacturer: str = "SIEMENS",
-    model: str = "",
+    model: str = "Somatom Definition Flash",
     body_part: str = "CHEST",
     slice_thickness_mm: float = 1.5,
     total_slices: int = 1,
@@ -287,3 +287,50 @@ def search_cases(
 
     results.sort(key=lambda c: c.get("created_at", ""), reverse=True)
     return results
+
+
+def get_firestore_db():
+    """secrets.toml에 service_account_path가 있으면 Firestore 클라이언트를 반환하고, 없으면 None을 반환한다."""
+    try:
+        import streamlit as st
+        from modules import firebase_client
+
+        sa_path = st.secrets.get("service_account_path")
+        if sa_path:
+            return firebase_client.get_db(sa_path)
+    except Exception:
+        pass
+    return None
+
+
+def data_path(relative_path: str | Path) -> Path:
+    """A의 공통 함수 data_path() 호환 래퍼: data_dir 기준 실제 파일 경로를 반환한다."""
+    return get_base_data_dir() / Path(relative_path)
+
+
+def list_visible_cases(
+    db,
+    role: str,
+    uid: str,
+    keyword: str = "",
+    status: str | None = None,
+    body_part: str | None = None,
+    created_by: str | None = None,
+    assignee: str | None = None,
+    unassigned_only: bool = False,
+    local_db_path: Path | None = None,
+) -> list[dict]:
+    """A의 공통 함수 list_visible_cases() 호환 래퍼: search_cases 결과에 can_view() 권한 필터를 적용한다."""
+    from modules.permissions import can_view
+
+    cases = search_cases(
+        keyword=keyword,
+        status=status,
+        body_part=body_part,
+        created_by=created_by,
+        assignee=assignee,
+        unassigned_only=unassigned_only,
+        firestore_client=db,
+        local_db_path=local_db_path,
+    )
+    return [c for c in cases if can_view(role, uid, c)]
