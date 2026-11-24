@@ -95,3 +95,26 @@ def test_bilateral_keeps_edge_sharper_than_gaussian():
     gau = gaussian_filter(step_image(), ksize=9).astype(np.int32)
     # 원본에서 얼마나 달라졌나: 경계를 지킬수록 작다
     assert np.abs(bil - img).max() < np.abs(gau - img).max()
+
+
+
+# ---------- sigma 입력 검사 (리뷰 반영) ----------
+
+BAD_SIGMAS = ["5", float("nan"), float("inf"), -float("inf"), True, None]
+
+
+@pytest.mark.parametrize("sigma", BAD_SIGMAS)
+def test_gaussian_bad_sigma_rejected(sigma):
+    with pytest.raises(ValueError, match="sigma"):
+        gaussian_filter(salt_image(), sigma=sigma)
+
+
+def test_gaussian_zero_sigma_allowed():
+    gaussian_filter(salt_image(), sigma=0)  # 0은 자동 계산이라 허용
+
+
+@pytest.mark.parametrize("name", ["sigma_color", "sigma_space"])
+@pytest.mark.parametrize("value", BAD_SIGMAS + [0])
+def test_bilateral_bad_sigma_rejected(name, value):
+    with pytest.raises(ValueError, match=name):
+        bilateral_filter(salt_image(), **{name: value})

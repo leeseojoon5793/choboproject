@@ -1,12 +1,14 @@
-"""노이즈 제거 필터 (역할 C).
+"""CT 저선량 잡음 제거용 필터 (역할 C).
 
-- median_filter: 주변 값의 가운데 값으로 바꿈. 튀는 점(스펙클) 제거에 강하고 경계가 덜 뭉개짐
+- median_filter: 주변 값의 가운데 값으로 바꿈. 튀는 점 제거에 강하고 경계가 덜 뭉개짐
 - bilateral_filter: 거리도 가깝고 밝기도 비슷한 이웃만 섞음. 경계를 지키면서 평평한 곳을 매끈하게
 - gaussian_filter: 주변 값을 가까울수록 크게 가중 평균. 비교 기준용
 
 모든 함수는 팀 공통 형태 (img, **params) -> 새 배열 이고, 원본은 바꾸지 않는다.
 입력은 8비트 흑백(2차원 uint8) 영상만 받는다.
 """
+import math
+
 import cv2
 import numpy as np
 
@@ -24,6 +26,16 @@ def _check_odd_ksize(ksize, minimum: int = 3) -> None:
     if ksize < minimum or ksize % 2 == 0:
         raise ValueError(f"커널 크기는 {minimum} 이상의 홀수여야 합니다.")
 
+def _check_sigma(value, name: str, allow_zero: bool) -> None:
+    """sigma 값이 유한한 숫자인지 검사한다. allow_zero가 False면 0도 거절."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+        raise ValueError(f"{name}는 숫자여야 합니다.")
+    if not math.isfinite(value):
+        raise ValueError(f"{name}는 유한한 숫자여야 합니다. (NaN, 무한대 불가)")
+    if allow_zero and value < 0:
+        raise ValueError(f"{name}는 0 이상이어야 합니다.")
+    if not allow_zero and value <= 0:
+        raise ValueError(f"{name}는 0보다 커야 합니다.")
 
 def median_filter(img: np.ndarray, ksize: int = 3) -> np.ndarray:
     _check_image(img)
@@ -35,8 +47,7 @@ def gaussian_filter(img: np.ndarray, ksize: int = 5, sigma: float = 0) -> np.nda
     """sigma가 0이면 OpenCV가 커널 크기로부터 자동 계산한다."""
     _check_image(img)
     _check_odd_ksize(ksize)
-    if sigma < 0:
-        raise ValueError("sigma는 0 이상이어야 합니다.")
+    _check_sigma(sigma, "sigma", allow_zero=True)
     return cv2.GaussianBlur(img, (ksize, ksize), sigma)
 
 
@@ -45,11 +56,11 @@ def bilateral_filter(
 ) -> np.ndarray:
     """d: 이웃 범위(지름), sigma_color: 밝기 차이를 얼마나 봐줄지, sigma_space: 거리를 얼마나 봐줄지.
 
-    기본값은 출발점일 뿐이고, 초음파에 맞는 값은 비교 실험으로 정한다.
+    기본값은 출발점일 뿐이고, CT 영상에 맞는 값은 비교 실험으로 정한다.
     """
     _check_image(img)
     if isinstance(d, bool) or not isinstance(d, (int, np.integer)) or d < 1:
         raise ValueError("d는 1 이상의 정수여야 합니다.")
-    if sigma_color <= 0 or sigma_space <= 0:
-        raise ValueError("sigma_color와 sigma_space는 0보다 커야 합니다.")
+    _check_sigma(sigma_color, "sigma_color", allow_zero=False)
+    _check_sigma(sigma_space, "sigma_space", allow_zero=False)
     return cv2.bilateralFilter(img, d, sigma_color, sigma_space)
