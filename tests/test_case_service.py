@@ -19,8 +19,8 @@ def read(tmp_path, name):
 
 def test_admin_assigns_and_log_written(tmp_path):
     seed(tmp_path)
-    ok, _ = change_status(None, "admin", "u-admin", "C001", "assigned", assignee="u-rev", data_dir=tmp_path)
-    assert ok
+    ok, msg = change_status(None, "admin", "u-admin", "C001", "assigned", assignee="u-rev", data_dir=tmp_path)
+    assert ok and "received에서 assigned" in msg
     case = read(tmp_path, "cases_local.json")["C001"]
     assert case["status"] == "assigned" and case["assignee"] == "u-rev"
     log = list(read(tmp_path, "status_logs_local.json").values())[0]

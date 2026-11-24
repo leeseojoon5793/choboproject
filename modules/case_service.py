@@ -53,14 +53,14 @@ def change_status(db, role, uid, case_id, new_status, reason="", assignee="",
     ok, msg = can_change_status(role, uid, case, new_status)
     if not ok:
         return False, msg
-
+    old_status = case["status"]
     now = _now_utc_z()
     updates = {"status": new_status, "updated_at": now}
     if new_status == "assigned":
         updates["assignee"] = assignee
     log = {
         "case_id": case_id,
-        "from_status": case["status"],
+        "from_status": old_status,
         "to_status": new_status,
         "changed_by": uid,
         "reason": reason,
@@ -80,4 +80,4 @@ def change_status(db, role, uid, case_id, new_status, reason="", assignee="",
         _save(cases_path, local_cases)
         _save(logs_path, logs)
 
-    return True, f"상태를 {case['status']}에서 {new_status}(으)로 바꿨습니다."
+    return True, f"상태를 {old_status}에서 {new_status}(으)로 바꿨습니다."
