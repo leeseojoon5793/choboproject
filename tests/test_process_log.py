@@ -107,9 +107,27 @@ def test_no_permission_saves_nothing(tmp_path, role, uid):
     assert not (tmp_path / "logs.json").exists()
 
 
-def test_absolute_result_path_rejected(tmp_path):
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "/home/server/data/results/a.png",
+        "/etc/x",
+        "../x",
+        "results/../../x",
+    ],
+)
+def test_bad_result_path_rejected(tmp_path, bad_path):
     with pytest.raises(ValueError, match="상대 경로"):
-        save(tmp_path, result_path="/home/server/data/results/a.png")
+        save(tmp_path, result_path=bad_path)
+    assert not (tmp_path / "logs.json").exists()
+
+
+def test_default_local_path_follows_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr("modules.process_log.get_base_data_dir", lambda: tmp_path)
+    saved = save(tmp_path, local_db_path=None)
+
+    assert (tmp_path / "process_logs_local.json").exists()
+    assert list_process_logs("C001_000") == [saved]
 
 
 def test_list_filters_by_image_and_sorts_newest_first(tmp_path):
