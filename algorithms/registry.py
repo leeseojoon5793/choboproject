@@ -60,7 +60,10 @@ def run_algorithm(key: str, img: np.ndarray, params: dict | None = None) -> np.n
     """알고리즘을 찾아서 파라미터를 검사한 뒤 실행한다. 빠진 파라미터는 기본값으로 채운다."""
     algo = _get(key)
     specs = algo["params"]
-    params = params or {}
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        raise ValueError("params는 {이름: 값} 형태의 딕셔너리여야 합니다.")
 
     unknown = set(params) - set(specs)
     if unknown:
@@ -70,6 +73,10 @@ def run_algorithm(key: str, img: np.ndarray, params: dict | None = None) -> np.n
     merged.update(params)
     for name, value in merged.items():
         spec = specs[name]
+        if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+            raise ValueError(f"{name} 값은 숫자여야 합니다.")
+        if isinstance(spec["default"], int) and not isinstance(value, (int, np.integer)):
+            raise ValueError(f"{name} 값은 정수여야 합니다.")
         if not spec["min"] <= value <=spec["max"]:
             raise ValueError(f"{name} 값은 {spec['min']}~{spec['max']} 사이여야 합니다.")
 
