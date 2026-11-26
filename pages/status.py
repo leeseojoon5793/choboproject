@@ -3,6 +3,7 @@ import streamlit as st
 from modules.auth import require_login
 from modules.case_service import list_visible_cases
 from modules.db import get_db_or_none
+from modules.memo_ui import memo_panel
 from modules.status_ui import STATUS_LABELS, status_panel
 
 st.title("케이스 상태 관리")
@@ -24,3 +25,6 @@ case_id = st.selectbox(
     format_func=lambda i: f"{i} | {by_id[i].get('title', '')} | {STATUS_LABELS.get(by_id[i]['status'], by_id[i]['status'])}",
 )
 status_panel(db, role, uid, by_id[case_id])
+
+st.divider()
+memo_panel(db, role, uid, by_id[case_id])
