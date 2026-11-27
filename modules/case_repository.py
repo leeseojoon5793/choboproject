@@ -138,7 +138,7 @@ def register_case(
     file_bytes: bytes | None = None,
     assignee: str = "",
     manufacturer: str = "SIEMENS",
-    model: str = "",
+    model: str = "Somatom Definition Flash",
     body_part: str = "CHEST",
     slice_thickness_mm: float = 1.5,
     total_slices: int = 1,
