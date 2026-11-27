@@ -30,7 +30,7 @@ def _fake_login():
 
 
 def _firebase_login(api_key, sa_path):
-    with st.form("fake_login", border=False):
+    with st.form("login", border=False):
         email = st.text_input("이메일", placeholder="name@example.com")
         password = st.text_input("비밀번호", type="password")
         submitted = st.form_submit_button("로그인", type="primary", width="stretch")
