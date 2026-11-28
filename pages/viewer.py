@@ -10,8 +10,8 @@ from modules.case_service import list_visible_cases
 from modules.db import get_db_or_none
 from modules.paths import data_path
 from modules.permissions import can_edit
-from modules.process_log import list_process_logs, save_process_log
-from modules.result_image import make_result_path, save_result_image
+from modules.process_log import list_process_logs
+from modules.result_image import save_processed_result
 from modules.roi import roi_histogram, roi_stats
 from modules.slice_repository import list_slices
 from modules.viewer_figure import build_compare_figure
@@ -112,20 +112,17 @@ if roi_ok:
 st.subheader("처리 이력")
 if can_edit(role, uid, case):
     if st.button("이 결과 저장", disabled=not roi_ok):
-        result_path = make_result_path(case["case_id"], image_id, key)
-        save_result_image(processed, result_path)
         metrics = {
             "before": {k: float(v) for k, v in before.items()},
             "after": {k: float(v) for k, v in after.items()},
         }
         try:
-            save_process_log(
+            save_processed_result(
                 role, uid, case, image_id, key, ALGORITHMS[key]["version"],
-                params, roi, result_path, metrics, firestore_client=db,
+                params, roi, processed, metrics, firestore_client=db,
             )
-        except (PermissionError, ValueError) as e:
-            data_path(result_path).unlink(missing_ok=True)
-            st.error(str(e))
+        except Exception as e:
+            st.error(f"저장하지 못했습니다: {e}")
         else:
             st.success("처리 결과를 저장했습니다.")
 else:

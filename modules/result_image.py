@@ -5,6 +5,7 @@ import numpy as np
 from PIL import Image
 
 from modules.paths import data_path
+from modules.process_log import save_process_log
 
 
 def make_result_path(case_id, image_id, algorithm, now=None) -> str:
@@ -19,3 +20,25 @@ def save_result_image(img: np.ndarray, result_path: str) -> None:
     path = data_path(result_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(img).save(path)
+
+
+def save_processed_result(
+    role, uid, case, image_id, algorithm, algorithm_version, params, roi, img, metrics,
+    firestore_client=None, local_db_path=None,
+) -> dict:
+    """결과 영상을 저장하고 처리 이력을 남긴다.
+
+    이력 저장이 어떤 이유로든 실패하면 방금 저장한 영상 파일을 지우고 예외를 그대로 올린다.
+    권한 검사(can_edit)는 save_process_log 안에서 한다.
+    """
+    result_path = make_result_path(case["case_id"], image_id, algorithm)
+    save_result_image(img, result_path)
+    try:
+        return save_process_log(
+            role, uid, case, image_id, algorithm, algorithm_version,
+            params, roi, result_path, metrics,
+            firestore_client=firestore_client, local_db_path=local_db_path,
+        )
+    except Exception:
+        data_path(result_path).unlink(missing_ok=True)
+        raise
