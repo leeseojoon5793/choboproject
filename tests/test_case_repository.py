@@ -98,3 +98,26 @@ def test_register_case_rejects_duplicate_id(tmp_path):
             local_images_db_path=images_db,
             data_dir=tmp_path,
         )
+
+
+def test_register_case_default_metadata_values(tmp_path):
+    img_dir = tmp_path / "low_dose_images"
+    cases_db = tmp_path / "cases_local.json"
+    images_db = tmp_path / "images_local.json"
+    png_bytes = _make_png_bytes()
+
+    result = register_case(
+        case_id="DEFAULT-META-001",
+        title="기본 메타데이터 테스트",
+        created_by="register-user-1",
+        file_name="001.png",
+        file_bytes=png_bytes,
+        image_dir=img_dir,
+        local_db_path=cases_db,
+        local_images_db_path=images_db,
+        data_dir=tmp_path,
+    )
+
+    assert result["manufacturer"] == "SIEMENS"
+    assert result["model"] == "Somatom Definition Flash"
+    assert result["slice_thickness_mm"] == 1.5
