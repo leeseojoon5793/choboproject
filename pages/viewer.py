@@ -1,4 +1,4 @@
-"""원본·결과 비교 뷰어 + ROI 분석 (역할 C)."""
+"""케이스·슬라이스 뷰어 + 원본·결과 비교 + ROI 분석 + 처리 이력 (역할 C)."""
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -6,20 +6,47 @@ from PIL import Image
 
 from algorithms.registry import ALGORITHMS, run_algorithm
 from modules.auth import require_login
+from modules.case_service import list_visible_cases
+from modules.db import get_db_or_none
+from modules.paths import data_path
+from modules.permissions import can_edit
+from modules.process_log import list_process_logs
+from modules.result_image import save_processed_result
 from modules.roi import roi_histogram, roi_stats
+from modules.slice_repository import list_slices
 from modules.viewer_figure import build_compare_figure
 
 uid, role = require_login()
+db = get_db_or_none()
 
 st.title("CT 영상 뷰어")
 
-# 케이스·영상 저장(B)과 연동하기 전까지는 PNG를 직접 올려서 확인한다
-uploaded = st.file_uploader("저선량 CT PNG 불러오기 (임시)", type=["png", "jpg", "jpeg"])
-if uploaded is None:
-    st.info("PNG 파일을 올리면 원본과 처리 결과를 비교할 수 있어요.")
+# ---------- 케이스·슬라이스 선택 ----------
+cases = list_visible_cases(db, role, uid)
+if not cases:
+    st.info("볼 수 있는 케이스가 없습니다.")
     st.stop()
 
-original = np.array(Image.open(uploaded).convert("L"))
+case = st.selectbox(
+    "케이스", cases,
+    format_func=lambda c: f"{c['case_id']} · {c.get('title', '')} ({c.get('status', '')})",
+)
+
+slices = list_slices(case["case_id"], firestore_client=db)
+if not slices:
+    st.info("이 케이스에 등록된 슬라이스가 없습니다.")
+    st.stop()
+
+current = st.selectbox(
+    f"슬라이스 (총 {len(slices)}장)", slices, format_func=lambda s: f"{s['slice_index']:03d}"
+)
+image_id = current["image_id"]
+
+try:
+    original = np.array(Image.open(data_path(current["file_path"])).convert("L"))
+except (OSError, ValueError) as e:
+    st.error(f"영상을 열 수 없습니다: {e}")
+    st.stop()
 height, width = original.shape
 
 # ---------- 알고리즘 선택 + 파라미터 ----------
@@ -80,3 +107,42 @@ if roi_ok:
             index=np.arange(0, 256, 256 // bins),
         )
     )
+
+# ---------- 처리 결과 저장 ----------
+st.subheader("처리 이력")
+if can_edit(role, uid, case):
+    if st.button("이 결과 저장", disabled=not roi_ok):
+        metrics = {
+            "before": {k: float(v) for k, v in before.items()},
+            "after": {k: float(v) for k, v in after.items()},
+        }
+        try:
+            save_processed_result(
+                role, uid, case, image_id, key, ALGORITHMS[key]["version"],
+                params, roi, processed, metrics, firestore_client=db,
+            )
+        except Exception as e:
+            st.error(f"저장하지 못했습니다: {e}")
+        else:
+            st.success("처리 결과를 저장했습니다.")
+else:
+    st.caption("이 케이스는 보기만 할 수 있습니다. (저장 권한 없음)")
+
+# ---------- 이 슬라이스의 이전 처리 기록 ----------
+logs = list_process_logs(image_id, firestore_client=db)
+if not logs:
+    st.caption("이 슬라이스에 저장된 처리 이력이 없습니다.")
+else:
+    rows = []
+    for log in logs:
+        label = ALGORITHMS.get(log["algorithm"], {}).get("label", log["algorithm"])
+        std_after = log["metrics"].get("after", {}).get("std")
+        rows.append({
+            "시각 (UTC)": log["created_at"],
+            "알고리즘": label,
+            "파라미터": ", ".join(f"{k}={v}" for k, v in log["params"].items()),
+            "ROI": str(log["roi"]),
+            "결과 표준편차": None if std_after is None else round(std_after, 2),
+            "실행자": log["run_by"],
+        })
+    st.dataframe(pd.DataFrame(rows), hide_index=True)
