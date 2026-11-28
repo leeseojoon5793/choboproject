@@ -1,160 +1,336 @@
+import json
+
 import streamlit as st
-from datetime import datetime
+
+from modules.db import get_db_or_none
+from modules.case_service import list_visible_cases, change_status
+from modules.memo import add_memo, list_memos
+from modules.paths import get_data_dir
 
 
-def show_case_lists():
-    st.header("CT 영상 검토 목록")
+STATUS_LABELS = {
+    "received": "검토 대기",
+    "assigned": "담당자 배정",
+    "in_review": "검토 중",
+    "done": "검토 완료",
+    "recheck": "재검토 요청",
+}
 
-    if "cases" not in st.session_state:
-        st.session_state["cases"] = [
-            {
-                "검사 번호": "CT-001",
-                "검사 종류": "Chest CT",
-                "상태": "검토 대기",
-                "담당자": "미배정"
-            },
-            {
-                "검사 번호": "CT-002",
-                "검사 종류": "Chest CT",
-                "상태": "검토 대기",
-                "담당자": "미배정"
-            },
-            {
-                "검사 번호": "CT-003",
-                "검사 종류": "Chest CT",
-                "상태": "검토 대기",
-                "담당자": "미배정"
-            },
-            {
-                "검사 번호": "CT-004",
-                "검사 종류": "Chest CT",
-                "상태": "검토 완료",
-                "담당자": "reviewer"
-            }
-        ]
 
-    cases = st.session_state["cases"]
+def get_reviewers(db):
+    if db is None:
+        return {"fake-reviewer": "개발용 검토 담당"}
 
-    reviewer_options = [
-        "미배정",
-        "register",
-        "reviewer",
-        "admin"
-    ]
+    reviewers = {}
 
-    st.subheader("CT 영상 관리")
+    try:
+        users = db.collection("users").stream()
 
-    for case in cases:
-        case.setdefault("메모", "")
-        case.setdefault("리포트", "")
-        case.setdefault("품질 점검 사유", "")
-        case.setdefault("재검토 상태", "요청 없음")
-        case.setdefault("변경 이력", [])
+        for user in users:
+            data = user.to_dict()
 
-        with st.container(border=True):
-            st.subheader(case["검사 번호"])
+            if data.get("role") == "reviewer":
+                reviewers[user.id] = data.get("name", user.id)
 
-            st.write(f"검사 종류: {case['검사 종류']}")
-            st.write(f"상태: {case['상태']}")
+    except Exception as e:
+        st.error(f"검토 담당자 목록을 불러오지 못했습니다: {e}")
 
-            old_assignee = case["담당자"]
+    return reviewers
 
-            selected = st.selectbox(
-                "담당자 선택",
-                reviewer_options,
-                index=reviewer_options.index(old_assignee),
-                key=f"assignee_{case['검사 번호']}"
+
+def get_status_logs(db, case_id):
+    if db is not None:
+        try:
+            logs = db.collection("status_logs").stream()
+
+            result = [
+                log.to_dict()
+                for log in logs
+                if log.to_dict().get("case_id") == case_id
+            ]
+
+            return sorted(
+                result,
+                key=lambda x: x.get("created_at", ""),
+                reverse=True
             )
 
-            if selected != old_assignee:
-                case["담당자"] = selected
+        except Exception as e:
+            st.error(f"변경 이력을 불러오지 못했습니다: {e}")
+            return []
 
-                case["변경 이력"].append(
-                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-                    f"담당자 변경: {old_assignee} → {selected}"
-                )
+    log_path = get_data_dir() / "status_logs_local.json"
 
-            st.write(f"현재 담당자: {case['담당자']}")
+    if not log_path.exists():
+        return []
 
-            with st.expander("메모 및 리포트"):
-                case["메모"] = st.text_area(
-                    "검토 메모",
-                    value=case["메모"],
-                    key=f"memo_{case['검사 번호']}"
-                )
+    try:
+        logs = json.loads(log_path.read_text(encoding="utf-8"))
 
-                case["리포트"] = st.text_area(
-                    "품질 점검 리포트",
-                    value=case["리포트"],
-                    key=f"report_{case['검사 번호']}"
-                )
+        return sorted(
+            [
+                log for log in logs.values()
+                if log.get("case_id") == case_id
+            ],
+            key=lambda x: x.get("created_at", ""),
+            reverse=True
+        )
 
-            with st.expander("품질 점검 사유"):
-                case["품질 점검 사유"] = st.text_area(
-                    "품질 점검이 필요한 이유",
-                    value=case["품질 점검 사유"],
-                    key=f"reason_{case['검사 번호']}",
-                    placeholder="예: 영상의 밝기가 낮아 세부 구조 확인이 어려움"
-                )
+    except (json.JSONDecodeError, OSError):
+        return []
 
-                if case["품질 점검 사유"]:
-                    st.warning(
-                        f"점검 사유: {case['품질 점검 사유']}"
+
+def show_case_lists(uid, role):
+    db = get_db_or_none()
+    cases = list_visible_cases(db, role, uid)
+
+    st.header("CT 영상 검토 목록")
+
+    if not cases:
+        st.info("현재 표시할 검토 목록이 없습니다.")
+        return
+
+    reviewers = get_reviewers(db)
+
+    for case in cases:
+        case_id = case.get("case_id", "unknown")
+        status = case.get("status", "received")
+
+        with st.expander(
+            f"{case.get('title', case_id)} | {case_id}"
+        ):
+            st.write(f"검사 부위: {case.get('body_part', '-')}")
+            st.write(f"제조사: {case.get('manufacturer', '-')}")
+            st.write(f"모델: {case.get('model', '-')}")
+            st.write(f"상태: {STATUS_LABELS.get(status, status)}")
+            st.write(
+                f"담당자: {reviewers.get(case.get('assignee'), case.get('assignee') or '미배정')}"
+            )
+
+            if role == "admin" and status == "received":
+                reviewer_ids = list(reviewers.keys())
+
+                if reviewer_ids:
+                    selected_uid = st.selectbox(
+                        "검토 담당자 선택",
+                        reviewer_ids,
+                        format_func=lambda x: reviewers[x],
+                        key=f"assignee_{case_id}"
                     )
-                else:
-                    st.info("등록된 품질 점검 사유가 없습니다.")
 
-            with st.expander("재검토 요청"):
-                st.write(
-                    f"현재 재검토 상태: {case['재검토 상태']}"
+                    if st.button(
+                        "담당자 배정",
+                        key=f"assign_{case_id}"
+                    ):
+                        success, message = change_status(
+                            db,
+                            role,
+                            uid,
+                            case_id,
+                            "assigned",
+                            assignee=selected_uid
+                        )
+
+                        if success:
+                            st.success(message)
+                            st.rerun()
+                        else:
+                            st.error(message)
+
+            if role == "reviewer" and status == "assigned":
+                if st.button(
+                    "검토 시작",
+                    key=f"start_{case_id}"
+                ):
+                    success, message = change_status(
+                        db, role, uid, case_id, "in_review"
+                    )
+
+                    if success:
+                        st.success(message)
+                        st.rerun()
+                    else:
+                        st.error(message)
+
+            st.subheader("메모")
+
+            memo_content = st.text_area(
+                "메모 내용",
+                key=f"memo_{case_id}"
+            )
+
+            if st.button(
+                "메모 저장",
+                key=f"save_memo_{case_id}"
+            ):
+                try:
+                    add_memo(
+                        role,
+                        uid,
+                        case,
+                        memo_content,
+                        memo_type="memo",
+                        firestore_client=db
+                    )
+                    st.success("메모가 저장되었습니다.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+
+            st.subheader("검토 소견")
+
+            report_content = st.text_area(
+                "검토 소견 작성",
+                key=f"report_{case_id}"
+            )
+
+            if st.button(
+                "소견 저장",
+                key=f"save_report_{case_id}"
+            ):
+                try:
+                    add_memo(
+                        role,
+                        uid,
+                        case,
+                        report_content,
+                        memo_type="report",
+                        firestore_client=db
+                    )
+                    st.success("검토 소견이 저장되었습니다.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+
+            st.subheader("품질 점검 사유")
+
+            quality_reason = st.text_area(
+                "품질 점검 사유 입력",
+                key=f"quality_reason_{case_id}"
+            )
+
+            if st.button(
+                "품질 점검 사유 저장",
+                key=f"save_quality_{case_id}"
+            ):
+                try:
+                    add_memo(
+                        role,
+                        uid,
+                        case,
+                        f"[품질 점검 사유] {quality_reason}",
+                        memo_type="memo",
+                        firestore_client=db
+                    )
+                    st.success("품질 점검 사유가 저장되었습니다.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+
+            if role == "reviewer" and status == "in_review":
+                recheck_reason = st.text_input(
+                    "재검토 요청 사유",
+                    key=f"recheck_reason_{case_id}"
                 )
 
                 if st.button(
-                    "재검토 요청하기",
-                    key=f"recheck_{case['검사 번호']}"
+                    "재검토 요청",
+                    key=f"recheck_{case_id}"
                 ):
-                    old_status = case["재검토 상태"]
-                    case["재검토 상태"] = "재검토 요청"
-
-                    case["변경 이력"].append(
-                        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
-                        f"재검토 상태 변경: {old_status} → 재검토 요청"
+                    success, message = change_status(
+                        db,
+                        role,
+                        uid,
+                        case_id,
+                        "recheck",
+                        reason=recheck_reason
                     )
 
-                    st.rerun()
+                    if success:
+                        st.success(message)
+                        st.rerun()
+                    else:
+                        st.error(message)
 
-                if case["재검토 상태"] == "재검토 요청":
-                    st.warning("재검토가 요청된 영상입니다.")
+                if st.button(
+                    "검토 완료",
+                    key=f"done_{case_id}"
+                ):
+                    success, message = change_status(
+                        db, role, uid, case_id, "done"
+                    )
 
-            with st.expander("변경 이력"):
-                if case["변경 이력"]:
-                    for history in case["변경 이력"]:
-                        st.write(history)
-                else:
-                    st.write("아직 변경 이력이 없습니다.")
+                    if success:
+                        st.success(message)
+                        st.rerun()
+                    else:
+                        st.error(message)
+
+            st.subheader("저장된 메모 및 소견")
+
+            memos = list_memos(
+                case_id,
+                firestore_client=db
+            )
+
+            if memos:
+                for memo in memos:
+                    memo_type = memo.get("memo_type", "memo")
+                    label = "검토 소견" if memo_type == "report" else "메모"
+
+                    st.write(
+                        f"**{label}**: {memo.get('content', '')}"
+                    )
+
+                    st.caption(
+                        f"작성자: {memo.get('created_by', '-')} | "
+                        f"작성일: {memo.get('created_at', '-')}"
+                    )
+            else:
+                st.info("저장된 메모가 없습니다.")
+
+            st.subheader("변경 이력")
+
+            logs = get_status_logs(db, case_id)
+
+            if logs:
+                for log in logs:
+                    st.write(
+                        f"{log.get('from_status', '-')} → "
+                        f"{log.get('to_status', '-')}"
+                    )
+
+                    st.caption(
+                        f"변경 사유: {log.get('reason', '-')} | "
+                        f"변경일: {log.get('created_at', '-')}"
+                    )
+            else:
+                st.info("변경 이력이 없습니다.")
 
     st.divider()
 
-    waiting_tab, completed_tab = st.tabs(
-        ["대기 목록", "완료 목록"]
-    )
+    waiting_cases = [
+        case for case in cases
+        if case.get("status") in {
+            "received", "assigned", "in_review", "recheck"
+        }
+    ]
 
-    with waiting_tab:
-        waiting_cases = [
-            case for case in cases
-            if case["상태"] == "검토 대기"
-        ]
+    done_cases = [
+        case for case in cases
+        if case.get("status") == "done"
+    ]
 
-        st.subheader("검토 대기 영상")
-        st.write(f"대기 중인 영상: {len(waiting_cases)}건")
-        st.table(waiting_cases)
+    tab1, tab2 = st.tabs(["대기 목록", "완료 목록"])
 
-    with completed_tab:
-        completed_cases = [
-            case for case in cases
-            if case["상태"] == "검토 완료"
-        ]
+    with tab1:
+        for case in waiting_cases:
+            st.write(
+                f"{case.get('case_id')} - {case.get('title', '-')}"
+            )
 
-        st.subheader("검토 완료 영상")
-        st.write(f"완료된 영상: {len(completed_cases)}건")
-        st.table(completed_cases)
+    with tab2:
+        for case in done_cases:
+            st.write(
+                f"{case.get('case_id')} - {case.get('title', '-')}"
+            )
