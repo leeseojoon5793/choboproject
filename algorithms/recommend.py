@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from algorithms.quality import brightness, contrast, sharpness
+from modules.metrics import compare_quality
 
 
 def validate_ksizes(ksizes):
@@ -76,33 +76,57 @@ def apply_candidate(img, candidate):
     raise ValueError("지원하지 않는 필터입니다.")
 
 
-def calculate_score(img):
-    b = brightness(img)
-    c = contrast(img)
-    s = sharpness(img)
-
-    score = (
-        min(b / 128, 1) * 20
-        + min(c / 64, 1) * 30
-        + min(s / 500, 1) * 50
+def calculate_score(
+    before,
+    after,
+    flat_roi,
+    lesion_roi,
+    background_roi
+):
+    metrics = compare_quality(
+        before,
+        after,
+        flat_roi,
+        lesion_roi,
+        background_roi
     )
 
+    noise_reduction = metrics["noise_reduction"]
+    edge_preservation = metrics["edge_preservation"]
+
+    noise_score = max(0, min(noise_reduction, 1))
+    edge_score = max(0, 1 - abs(edge_preservation - 1))
+
+    score = noise_score * 50 + edge_score * 50
+
     return {
-        "밝기": round(b, 2),
-        "대비": round(c, 2),
-        "선명도": round(s, 2),
+        "잡음 감소율": round(noise_reduction, 4),
+        "경계 보존율": round(edge_preservation, 4),
+        "처리 전 잡음": round(metrics["noise_before"], 2),
+        "처리 후 잡음": round(metrics["noise_after"], 2),
+        "처리 전 경계 대비": round(metrics["contrast_before"], 2),
+        "처리 후 경계 대비": round(metrics["contrast_after"], 2),
         "점수": round(score, 2)
     }
 
 
 def recommend_settings(
     img,
+    flat_roi,
+    lesion_roi,
+    background_roi,
     median_ksizes=(3, 5, 7),
     gaussian_ksizes=(3, 5, 7),
     bilateral_d=9,
     bilateral_sigma_color=75,
     bilateral_sigma_space=75
 ):
+    if not isinstance(img, np.ndarray):
+        raise ValueError("영상은 NumPy 배열이어야 합니다.")
+
+    if img.ndim != 2 or img.dtype != np.uint8:
+        raise ValueError("8비트 흑백(2차원 uint8) 영상만 지원합니다.")
+
     candidates = generate_candidates(
         median_ksizes,
         gaussian_ksizes,
@@ -115,14 +139,18 @@ def recommend_settings(
 
     for candidate in candidates:
         processed = apply_candidate(img, candidate)
-        metrics = calculate_score(processed)
+
+        metrics = calculate_score(
+            img,
+            processed,
+            flat_roi,
+            lesion_roi,
+            background_roi
+        )
 
         results.append({
             "설정": candidate["이름"],
-            "밝기": metrics["밝기"],
-            "대비": metrics["대비"],
-            "선명도": metrics["선명도"],
-            "점수": metrics["점수"]
+            **metrics
         })
 
     results.sort(
